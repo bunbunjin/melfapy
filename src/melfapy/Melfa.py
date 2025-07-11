@@ -1,7 +1,9 @@
+import asyncio
+import concurrent.futures
+import threading
+
 from dataclasses import dataclass, field
 from utils.advanced_S_curve_acceleration import AdvancedSCurvePlanner
-
-# import trio
 import struct
 import socket
 import time
@@ -22,27 +24,23 @@ class MelfaPose:
 
 
 @dataclass
-class MelfaIO:
-    bit_top: int = 0
-    bit_mask: int = 0
-    io_data: int = 0
-
-
-@dataclass
 class MelfaPacket:
-
     command: int
     send_type: int
     recv_type: int
     pose: MelfaPose
     send_io_type: int = 0
     recv_io_type: int = 0
-    io: MelfaIO = field(default_factory=MelfaIO)
+    bit_top: int = 0
+    bit_mask: int = 0
+    io_data: int = 0
     tcount: int = 0
     ccount: int = 1
-    ex_pose: MelfaPose = MelfaPose([0]*10)
+    ex_pose: MelfaPose = field(default_factory=list)
     address: tuple[str, int] = ("192.168.0.20", 10000)
-
+    lock = asyncio.Lock()
+    state = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    done_flags = [False, False, False, False]
     """
         @property
         def address(self):
@@ -68,9 +66,9 @@ class MelfaPacket:
             *self.pose.as_floats(),  # ffffffffII
             self.send_io_type,  # H
             self.recv_io_type,  # H
-            self.io.bit_top,  # H
-            self.io.bit_mask,  # H
-            self.io.io_data,  # H
+            self.bit_top,  # H
+            self.bit_mask,  # H
+            self.io_data,  # H
             self.tcount,  # H
             self.ccount,  # L
             reserve,  # H
@@ -110,8 +108,48 @@ class MelfaPacket:
                 "<HHHHffffffffIIHHHHHHLHHffffffffIIHHffffffffIIHHffffffffII", data
             )
             position = recv_data[4:14]
-
+            print(f"positon = {position}")
             return position
+
+    async def run_axis(self, name, curve, dt, total_time) -> None:
+        axis_index = {'x': 0, 'y': 1, 'z': 2, "angle": 5}
+        _sleep_time = 0.0071
+        for t in np.arange(0, total_time + 1, _sleep_time):
+            pos, vel, acc, jerk = curve.get_profile(t)
+            pos = float(pos)
+            async with self.lock:
+                self.state[axis_index[name]] = pos
+            t += dt
+            await asyncio.sleep(dt)
+        # 最終値固定
+        async with self.lock:
+            if name == "angle":
+                axis_index["angle"] = 3
+            self.done_flags[axis_index[name]] = True
+            print(f"{name}完了: x={self.state[0]:.3f}, y={self.state[1]:.3f}, z={self.state[2]:.3f}")
+
+    async def get_current_pose(self) -> list:
+        async with self.lock:
+            return list(self.state)
+
+    async def send_pose(self, s) -> None:
+        while True:
+            async with self.lock:
+                if all(self.done_flags):
+                    break
+            stream_pose = self.state
+
+            print(f"モニタ: {stream_pose}")
+            await asyncio.sleep(0.0071)
+            packet = MelfaPacket(
+                command=self.command,
+                send_type=self.send_type,
+                recv_type=self.recv_type,
+                ex_pose=MelfaPose([0] * 10),
+                pose=MelfaPose(stream_pose),
+            )
+            print(packet)
+            s.sendto(packet.to_bytes(), self.address)
 
     def send_packet(self) -> None:
         _POSE = self.pose
@@ -138,24 +176,24 @@ class MelfaPacket:
         x = _POSE[0]
         y = _POSE[1]
         z = _POSE[2]
-        angle = _POSE[3]
+        angle = math.radians(_POSE[5])
+
 
         _init_POSE = self.get_position()
         _init_x = _init_POSE[0]
         _init_y = _init_POSE[1]
         _init_z = _init_POSE[2]
-        _init_angle = _init_POSE[3]
-
-        _q1 = _POSE[0]  # 終了位置
+        _init_angle = _init_POSE[5]
         _v_max = 20  # 最大速度
-        _a_max = 10  # 最大加速度
+        _a_max = 20  # 最大加速度
         _j_max = 50  # 最大ジャーク
+        _sleep_time = 0.0071
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(self.address)
             data = _first_packet.to_bytes()
-            s.sendto(data, self._address)
-            print("[INFO] Send to First packet\n", "-" * 10)
-            _q0 = _init_x  
+            s.sendto(data, self.address)
+            print("[INFO] Send to First packet¥n", "-" * 10)
+            _q0 = _init_x
             _q1 = x
             x_curve = AdvancedSCurvePlanner(_q0, _q1, _v_max, _a_max, _j_max)
             _q0 = _init_y
@@ -172,73 +210,17 @@ class MelfaPacket:
             _z_total_time = z_curve.T
             _a_total_time = a_curve.T
             s.sendto(data, self.address)
-            time.sleep(0.0071)
-            print("-" * 10, "[INFO] X axis Phase", "-" * 10)
-            for t in np.arange(0, _x_total_time, 0.0071):
-                pos, vel, acc, jerk = x_curve.get_profile(t)
-                x = float(pos)
+            time.sleep(_sleep_time)
 
-                _x_pose = MelfaPose(
-                    [x, _init_y, _init_z, 0, 0, _init_angle, 0, 0, 0, 0]
-                )
-                packet = MelfaPacket(
-                    command=self.command,
-                    send_type=self.send_type,
-                    recv_type=self.recv_type,
-                    pose=_x_pose,
-                    ccount=self.ccount,
-                    ex_pose=_zero_pose,
+            async def position_publish():
+                move_x, move_y, move_z, move_a, pos = await asyncio.gather(
+                    self.run_axis(name="x", curve=x_curve, total_time=_x_total_time, dt=_sleep_time),
+                    self.run_axis(name="y", curve=y_curve, total_time=_y_total_time, dt=_sleep_time),
+                    self.run_axis(name="z", curve=z_curve, total_time=_z_total_time, dt=_sleep_time),
+                    self.run_axis(name="angle", curve=a_curve, total_time=_a_total_time, dt=_sleep_time),
+                    self.send_pose(s),
                 )
 
-                s.sendto(packet.to_bytes(), self.address)
-                time.sleep(0.0071)
+            asyncio.run(position_publish())
 
-            print("-" * 10, "[INFO] Y axis Phase", "-" * 10)
-            time.sleep(0.0071)
-            for t in np.arange(0, _y_total_time, 0.0071):
-                pos, vel, acc, jerk = y_curve.get_profile(t)
-                y = float(pos)
-                _y_pose = MelfaPose([x, y, _init_z, 0, 0, _init_angle, 0, 0, 0, 0])
-                packet = MelfaPacket(
-                    command=self.command,
-                    send_type=self.send_type,
-                    recv_type=self.recv_type,
-                    pose=_y_pose,
-                    ccount=self.ccount,
-                    ex_pose=_zero_pose,
-                )
-
-                s.sendto(packet.to_bytes(), self.address)
-                time.sleep(0.0071)
-            print("-" * 10, "[INFO] Z axis Phase", "-" * 10)
-
-            for t in np.arange(0, _z_total_time, 0.0071):
-                pos, vel, acc, jerk = z_curve.get_profile(t)
-                z = float(pos)
-
-                _z_pose = MelfaPose([x, y, z, 0, 0, _init_angle, 0, 0, 0, 0])
-                packet = MelfaPacket(
-                    command=self.command,
-                    send_type=self.send_type,
-                    recv_type=self.recv_type,
-                    pose=_z_pose,
-                    ccount=self.ccount,
-                    ex_pose=_zero_pose,
-                )
-                s.sendto(packet.to_bytes(), self.address)
-            print("-" * 10, "[INFO] Angle axis Phase", "-" * 10)
-            for t in np.arange(0, _a_total_time, 0.0071):
-                pos, vel, acc, jerk = x_curve.get_profile(t)
-
-                angle = pos
-                _angle_pose = MelfaPose([x, y, z, 0, 0, angle, 0, 0, 0, 0])
-                packet = MelfaPacket(
-                    command=self.command,
-                    send_type=self.send_type,
-                    recv_type=self.recv_type,
-                    pose=_angle_pose,
-                    ccount=self.ccount,
-                    ex_pose=_zero_pose,
-                )
-                s.sendto(packet.to_bytes(), self._address)
         return None

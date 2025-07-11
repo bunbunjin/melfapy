@@ -10,5 +10,4 @@ Mitsubishi MELFAをPythonで動作させるためのライブラリ。
 4. send_packet()メソッドと使用して動き始める
 
 > Melfa座標指定フォーマット
-> 
 > [x, y, z, a, b, c f1, f2]

@@ -1,10 +1,10 @@
 from src.melfapy.Melfa import *
 
-pose = MelfaPose([350, 100, 100, 0, 0, 0, 0, 0, 0, 0])
-s = MelfaPacket(
+sample_pose = MelfaPose([130, 100, 100, 0, 0, 0, 0, 0, 0, 0])
+sample = MelfaPacket(
     command=1,
     send_type=0,
     recv_type=0,
-    pose=pose
+    pose=sample_pose
 )
-s.send_packet()
+sample.send_packet()
