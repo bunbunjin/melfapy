@@ -3,7 +3,7 @@ import concurrent.futures
 import threading
 
 from dataclasses import dataclass, field
-from utils.advanced_S_curve_acceleration import AdvancedSCurvePlanner
+from .utils.advanced_S_curve_acceleration import AdvancedSCurvePlanner
 import struct
 import socket
 import time
@@ -39,7 +39,7 @@ class MelfaPacket:
     ex_pose: MelfaPose = field(default_factory=list)
     address: tuple[str, int] = ("192.168.0.20", 10000)
     lock = asyncio.Lock()
-    state = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    state = [0, 0, 0, 0, 0, 0, 0, 0, 4, 0]
     done_flags = [False, False, False, False]
     """
         @property
@@ -113,7 +113,7 @@ class MelfaPacket:
 
     async def run_axis(self, name, curve, dt, total_time) -> None:
         axis_index = {'x': 0, 'y': 1, 'z': 2, "angle": 5}
-        _sleep_time = 0.0071
+        _sleep_time = 0.0031
         for t in np.arange(0, total_time + 1, _sleep_time):
             pos, vel, acc, jerk = curve.get_profile(t)
             pos = float(pos)
@@ -121,7 +121,7 @@ class MelfaPacket:
                 self.state[axis_index[name]] = pos
             t += dt
             await asyncio.sleep(dt)
-        # 最終値固定
+
         async with self.lock:
             if name == "angle":
                 axis_index["angle"] = 3
@@ -139,7 +139,7 @@ class MelfaPacket:
                     break
             stream_pose = self.state
 
-            print(f"モニタ: {stream_pose}")
+            print(f"Send to coordinate for Melfa: {stream_pose}")
             await asyncio.sleep(0.0071)
             packet = MelfaPacket(
                 command=self.command,
@@ -148,7 +148,6 @@ class MelfaPacket:
                 ex_pose=MelfaPose([0] * 10),
                 pose=MelfaPose(stream_pose),
             )
-            print(packet)
             s.sendto(packet.to_bytes(), self.address)
 
     def send_packet(self) -> None:
@@ -184,32 +183,38 @@ class MelfaPacket:
         _init_y = _init_POSE[1]
         _init_z = _init_POSE[2]
         _init_angle = _init_POSE[5]
-        _v_max = 20  # 最大速度
-        _a_max = 20  # 最大加速度
-        _j_max = 50  # 最大ジャーク
-        _sleep_time = 0.0071
+        print(_init_angle)
+        _v_max = 300  # 最大速度
+        _a_max = 500  # 最大加速度
+        _j_max = 700  # 最大ジャーク
+        _sleep_time = 0.0031
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(self.address)
             data = _first_packet.to_bytes()
             s.sendto(data, self.address)
-            print("[INFO] Send to First packet¥n", "-" * 10)
+            print("[INFO] Send to First packet", "-" * 10)
             _q0 = _init_x
             _q1 = x
             x_curve = AdvancedSCurvePlanner(_q0, _q1, _v_max, _a_max, _j_max)
+            
             _q0 = _init_y
             _q1 = y
             y_curve = AdvancedSCurvePlanner(_q0, _q1, _v_max, _a_max, _j_max)
+            
             _q0 = _init_z
             _q1 = z
             z_curve = AdvancedSCurvePlanner(_q0, _q1, _v_max, _a_max, _j_max)
+            
             _q0 = _init_angle
             _q1 = angle
+
             a_curve = AdvancedSCurvePlanner(_q0, _q1, _v_max, _a_max, _j_max)
+
             _x_total_time = x_curve.T
             _y_total_time = y_curve.T
             _z_total_time = z_curve.T
             _a_total_time = a_curve.T
-            s.sendto(data, self.address)
+
             time.sleep(_sleep_time)
 
             async def position_publish():
