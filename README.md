@@ -11,3 +11,4 @@ This is the Python library for controlling Mitsubishi MELFA .
 > MELFA Coordinate Format 
 > [x, y, z, a, b, c f1, f2]
 
+## Troubleshooting
