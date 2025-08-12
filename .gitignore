@@ -229,3 +229,4 @@ dist/
 # Virtual environments
 .venv
 
+.idea
