@@ -2,9 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 
-# Matplotlibの日本語フォント設定
-# ご使用の環境に日本語フォントがない場合は、適宜インストールしてください。
-# (例: 'IPAexGothic', 'Yu Gothic', 'Meiryo')
+
 try:
     mpl.rcParams["font.sans-serif"] = [
         "Hiragino Maru Gothic Pro",
@@ -76,27 +74,13 @@ class AdvancedSCurvePlanner:
                 self.Tj2 = self.Tj1
             # Case 2: 最大速度には到達しない (速度プロファイルが三角形)
             else:
-                # この計算式はS字カーブの特性に合致しない場合がありますが、
-                # 元のコードのロジックに従い、Tj1の計算を修正しました。
-                # D = 2 * (1/6 * j_max * Tj1**3) + a_max * (Tj1**2) - この式は正しくない可能性
-                # 正しいS字カーブプロファイルの導出には、各区間の積分が必要です。
-                # ここでは元のコードの意図を尊重し、a_maxに到達しない場合の処理を維持します。
-                # この式は D = 2 * ( (1/6)j*Tj1^3 + a_max*Tj1*Ta + 0.5*a_max*Ta^2)
-                # Ta=0なので D = 2 * (1/6 * j_max * Tj1^3) = 1/3 * j_max * Tj1^3
-                # Tj1 = (3 * D / j_max)**(1/3)
-                # しかし、元のコードの式は異なります。
-                # np.sqrt(4 * self.D * self.j_max**2 + self.a_max**3) - self.a_max**2 ) / (2 * self.a_max * self.j_max)
-                # これは別のケース（加速度が最大に達しないが速度は最大に達する）の式と混同されている可能性があります。
-                # ここではエラー修正のため、元のコードのまま進めます。
                 self.Tj1 = (
                     np.sqrt(4 * self.D * self.j_max**2 + self.a_max**3) - self.a_max**2
                 ) / (2 * self.a_max * self.j_max)
                 self.Ta = 0
                 self.Tv = 0
                 self.a_lim = self.j_max * self.Tj1
-                self.v_lim = 0.5 * self.j_max * self.Tj1**2 # v_lim = 2 * (0.5 * j_max * Tj1^2) のはず
-                # 正しいv_limは、加速フェーズ全体（Tj1+Ta+Tj2）の終了時の速度
-                # ここはTa=0なので、v_lim = a_lim * Tj1 - 0.5 * j_max * Tj1**2 = j_max * Tj1**2 - 0.5 * j_max * Tj1**2 = 0.5 * j_max * Tj1**2
+                self.v_lim = 0.5 * self.j_max * self.Tj1**2
                 self.Tj2 = self.Tj1
         # Case 3: 最大加速度に到達しない (加速度プロファイルが三角形)
         else:
@@ -170,16 +154,23 @@ class AdvancedSCurvePlanner:
             t_rel = t - self.t2
             jerk = -j_max_signed
             acc_at_t2 = a_lim_signed
-            vel_at_t2 = self.sign * (0.5 * self.j_max * self.Tj1**2 + self.a_lim * self.Ta) # 正しいはず
+            vel_at_t2 = self.sign * (
+                0.5 * self.j_max * self.Tj1**2 + self.a_lim * self.Ta
+            )  # 正しいはず
             pos_at_t2 = self.q0 + self.sign * (
-                (1/6) * self.j_max * self.Tj1**3
+                (1 / 6) * self.j_max * self.Tj1**3
                 + (0.5 * self.j_max * self.Tj1**2) * self.Ta
                 + 0.5 * self.a_lim * self.Ta**2
             )
 
             acc = acc_at_t2 + jerk * t_rel
             vel = vel_at_t2 + acc_at_t2 * t_rel + 0.5 * jerk * t_rel**2
-            pos = pos_at_t2 + vel_at_t2 * t_rel + 0.5 * acc_at_t2 * t_rel**2 + (1/6) * jerk * t_rel**3
+            pos = (
+                pos_at_t2
+                + vel_at_t2 * t_rel
+                + 0.5 * acc_at_t2 * t_rel**2
+                + (1 / 6) * jerk * t_rel**3
+            )
 
         # 定速フェーズ
         elif self.t3 <= t < self.t4:  # Phase 4: 定速
@@ -187,23 +178,21 @@ class AdvancedSCurvePlanner:
             jerk = 0
             acc = 0
             vel = v_lim_signed
-            # pos_at_t3は、上記フェーズ3の終了時点のposを正確に計算したもの
-            # v_lim_signed * (self.t3 - self.Tj1 - 0.5 * self.Ta) という元の計算式は
-            # v_maxに到達した時点からの積算距離を簡易的に計算しているため、
-            # Tj1やTj2で加速度が変化する区間の積分を考慮しないとズレる可能性があります。
-            # より正確には、t3の終端での速度がv_lim_signedであり、その時点までの位置を累計するべきです。
-            # ここでは前のフェーズのposをそのまま使います。
             q_at_t3_recalc = self.q0 + self.sign * (
-                (1/6) * self.j_max * self.Tj1**3 # Phase 1
-                + (0.5 * self.j_max * self.Tj1**2 * self.Ta + 0.5 * self.a_lim * self.Ta**2) # Phase 2 (distance covered in Ta)
-                + (v_lim_signed * self.Tj2 - 0.5 * self.a_lim * self.Tj2**2 + (1/6) * self.j_max * self.Tj2**3) # Phase 3
+                (1 / 6) * self.j_max * self.Tj1**3  # Phase 1
+                + (
+                    0.5 * self.j_max * self.Tj1**2 * self.Ta
+                    + 0.5 * self.a_lim * self.Ta**2
+                )  # Phase 2 (distance covered in Ta)
+                + (
+                    v_lim_signed * self.Tj2
+                    - 0.5 * self.a_lim * self.Tj2**2
+                    + (1 / 6) * self.j_max * self.Tj2**3
+                )  # Phase 3
             )
-            # v_lim_signed * self.Tj2 - 0.5 * a_lim_signed * self.Tj2**2 + (1/6) * j_max_signed * self.Tj2**3
-            # ↑これはPhase3の終了位置計算式
-            # 正しいpos_at_t3は、t3時点のposとv_lim_signedが一致するような計算
-            # 簡潔にするため、一つ前のフェーズの最終値を基点とします
-            # ただし、元のコードの pos_t3 の計算が独特なので、それに倣います。
-            pos_t3_from_init_logic = self.q0 + v_lim_signed * (self.t3 - self.Tj1 - 0.5 * self.Ta)
+            pos_t3_from_init_logic = self.q0 + v_lim_signed * (
+                self.t3 - self.Tj1 - 0.5 * self.Ta
+            )
             pos = pos_t3_from_init_logic + vel * t_rel
 
         # 減速フェーズ (加速フェーズの対称形)
@@ -213,8 +202,16 @@ class AdvancedSCurvePlanner:
             acc = -j_max_signed * t_rel
             vel = v_lim_signed - 0.5 * j_max_signed * t_rel**2
             # pos_t4 は定速フェーズの終了位置
-            pos_t4_from_init_logic = self.q0 + v_lim_signed * (self.t3 - self.Tj1 - 0.5 * self.Ta) + v_lim_signed * self.Tv
-            pos = pos_t4_from_init_logic + v_lim_signed * t_rel - (1/6) * j_max_signed * t_rel**3
+            pos_t4_from_init_logic = (
+                self.q0
+                + v_lim_signed * (self.t3 - self.Tj1 - 0.5 * self.Ta)
+                + v_lim_signed * self.Tv
+            )
+            pos = (
+                pos_t4_from_init_logic
+                + v_lim_signed * t_rel
+                - (1 / 6) * j_max_signed * t_rel**3
+            )
         elif self.t5 <= t < self.t6:  # Phase 6: 定減速
             t_rel = t - self.t5
             jerk = 0
@@ -233,20 +230,20 @@ class AdvancedSCurvePlanner:
                 - 0.5 * a_lim_signed * t_rel**2
             )
         elif self.t6 <= t <= self.t7:  # Phase 7: 減速終了（ジャーク減少）
-            t_rem = self.t7 - t # 終了までの残り時間
-            jerk = j_max_signed # 負の加速から0に戻るため、ジャークは正
-            acc = j_max_signed * t_rem # 終了に向けて加速度が0に戻る
-            vel = 0.5 * j_max_signed * t_rem**2 # 終了に向けて速度が0に戻る
-            pos = self.q1 - (1 / 6) * j_max_signed * t_rem**3 # 終了位置から逆算
+            t_rem = self.t7 - t  # 終了までの残り時間
+            jerk = j_max_signed  # 負の加速から0に戻るため、ジャークは正
+            acc = j_max_signed * t_rem  # 終了に向けて加速度が0に戻る
+            vel = 0.5 * j_max_signed * t_rem**2  # 終了に向けて速度が0に戻る
+            pos = self.q1 - (1 / 6) * j_max_signed * t_rem**3  # 終了位置から逆算
 
         # 範囲外の時刻
         else:
             jerk = 0
             acc = 0
-            if t < 0: # 開始時刻より前
+            if t < 0:  # 開始時刻より前
                 vel = 0
                 pos = self.q0
-            else: # 終了時刻より後
+            else:  # 終了時刻より後
                 vel = 0
                 pos = self.q1
 
@@ -318,4 +315,3 @@ def plot_profiles(planner, title):
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.93])
     plt.show()
-

@@ -13,7 +13,7 @@ import math
 
 @dataclass
 class MelfaPose:
-    values: list  # 座標（10つのfloat）
+    values: list
 
     def __getitem__(self, item):
         return self.values[item]
@@ -41,17 +41,6 @@ class MelfaPacket:
     lock = asyncio.Lock()
     state = [0, 0, 0, 0, 0, 0, 0, 0, 4, 0]
     done_flags = [False, False, False, False]
-    """
-        @property
-        def address(self):
-            return self._address
-
-        @address.setter
-        def address(self, value: tuple[str, int]):
-            if not value:
-                raise ValueError("MelfaPacket.address is empty")
-            self._address = value
-    """
 
     def to_bytes(self) -> bytes:
         reserve = 0
@@ -112,7 +101,7 @@ class MelfaPacket:
             return position
 
     async def run_axis(self, name, curve, dt, total_time) -> None:
-        axis_index = {'x': 0, 'y': 1, 'z': 2, "angle": 5}
+        axis_index = {"x": 0, "y": 1, "z": 2, "angle": 5}
         _sleep_time = 0.0031
         for t in np.arange(0, total_time + 1, _sleep_time):
             pos, vel, acc, jerk = curve.get_profile(t)
@@ -126,7 +115,9 @@ class MelfaPacket:
             if name == "angle":
                 axis_index["angle"] = 3
             self.done_flags[axis_index[name]] = True
-            print(f"{name}完了: x={self.state[0]:.3f}, y={self.state[1]:.3f}, z={self.state[2]:.3f}")
+            print(
+                f"{name}完了: x={self.state[0]:.3f}, y={self.state[1]:.3f}, z={self.state[2]:.3f}"
+            )
 
     async def get_current_pose(self) -> list:
         async with self.lock:
@@ -177,16 +168,15 @@ class MelfaPacket:
         z = _POSE[2]
         angle = math.radians(_POSE[5])
 
-
         _init_POSE = self.get_position()
         _init_x = _init_POSE[0]
         _init_y = _init_POSE[1]
         _init_z = _init_POSE[2]
         _init_angle = _init_POSE[5]
         print(_init_angle)
-        _v_max = 300  # 最大速度
-        _a_max = 500  # 最大加速度
-        _j_max = 700  # 最大ジャーク
+        _v_max = 300  # Max speed
+        _a_max = 500  # Max acceleration
+        _j_max = 700  # Max jerk
         _sleep_time = 0.0031
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(self.address)
@@ -196,15 +186,15 @@ class MelfaPacket:
             _q0 = _init_x
             _q1 = x
             x_curve = AdvancedSCurvePlanner(_q0, _q1, _v_max, _a_max, _j_max)
-            
+
             _q0 = _init_y
             _q1 = y
             y_curve = AdvancedSCurvePlanner(_q0, _q1, _v_max, _a_max, _j_max)
-            
+
             _q0 = _init_z
             _q1 = z
             z_curve = AdvancedSCurvePlanner(_q0, _q1, _v_max, _a_max, _j_max)
-            
+
             _q0 = _init_angle
             _q1 = angle
 
@@ -219,10 +209,30 @@ class MelfaPacket:
 
             async def position_publish():
                 move_x, move_y, move_z, move_a, pos = await asyncio.gather(
-                    self.run_axis(name="x", curve=x_curve, total_time=_x_total_time, dt=_sleep_time),
-                    self.run_axis(name="y", curve=y_curve, total_time=_y_total_time, dt=_sleep_time),
-                    self.run_axis(name="z", curve=z_curve, total_time=_z_total_time, dt=_sleep_time),
-                    self.run_axis(name="angle", curve=a_curve, total_time=_a_total_time, dt=_sleep_time),
+                    self.run_axis(
+                        name="x",
+                        curve=x_curve,
+                        total_time=_x_total_time,
+                        dt=_sleep_time,
+                    ),
+                    self.run_axis(
+                        name="y",
+                        curve=y_curve,
+                        total_time=_y_total_time,
+                        dt=_sleep_time,
+                    ),
+                    self.run_axis(
+                        name="z",
+                        curve=z_curve,
+                        total_time=_z_total_time,
+                        dt=_sleep_time,
+                    ),
+                    self.run_axis(
+                        name="angle",
+                        curve=a_curve,
+                        total_time=_a_total_time,
+                        dt=_sleep_time,
+                    ),
                     self.send_pose(s),
                 )
 
