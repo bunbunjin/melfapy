@@ -1,4 +1,4 @@
-# melpy
+# melfapy
 
 ## Overview
 This is the Python library for controlling Mitsubishi MELFA .
