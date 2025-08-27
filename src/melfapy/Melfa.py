@@ -1,7 +1,6 @@
 import asyncio
 import concurrent.futures
 import threading
-
 from dataclasses import dataclass, field
 from .utils.advanced_S_curve_acceleration import AdvancedSCurvePlanner
 import struct
@@ -37,11 +36,10 @@ class MelfaPacket:
     tcount: int = 0
     ccount: int = 1
     ex_pose: MelfaPose = field(default_factory=list)
-    address: tuple[str, int] = ("192.168.0.20", 10000)
+    address: tuple[str, int] = ("192.168.0.20", 10001)
     lock = asyncio.Lock()
     state = [0, 0, 0, 0, 0, 0, 0, 0, 4, 0]
     done_flags = [False, False, False, False]
-
 
     def to_bytes(self) -> bytes:
         reserve = 0
@@ -73,6 +71,14 @@ class MelfaPacket:
 
         return struct.pack(fmt, *args)
 
+
+@dataclass
+class MelfaController(MelfaPacket):
+    v_max: int = 300  # Max speed
+    a_max: int = 500  # Max acceleration
+    j_max: int = 700  # # Max jark
+    sleep_time = 0.0031
+
     def get_position(self) -> tuple:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(self.address)
@@ -100,13 +106,6 @@ class MelfaPacket:
             print(f"positon = {position}")
             return position
 
-
-@dataclass
-class MelfaController(MelfaPacket):
-    v_max:int = 300  # Max speed
-    a_max:int = 500  # Max acceleration
-    j_max:int = 700  # # Max jark
-    sleep_time = 0.0031
     async def run_axis(self, name, curve, dt, total_time) -> None:
         axis_index = {"x": 0, "y": 1, "z": 2, "angle": 5}
         for t in np.arange(0, total_time + 1, self.sleep_time):
@@ -180,7 +179,7 @@ class MelfaController(MelfaPacket):
         _init_z = _init_POSE[2]
         _init_angle = _init_POSE[5]
         print(_init_angle)
-
+        print("send to coordinate for Melfa")
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(self.address)
             data = _first_packet.to_bytes()
@@ -188,20 +187,28 @@ class MelfaController(MelfaPacket):
             print("[INFO] Send to First packet", "-" * 10)
             _q0 = _init_x
             _q1 = x
-            x_curve = AdvancedSCurvePlanner(_q0, _q1, self.v_max, self.a_max, self.j_max)
+            x_curve = AdvancedSCurvePlanner(
+                _q0, _q1, self.v_max, self.a_max, self.j_max
+            )
 
             _q0 = _init_y
             _q1 = y
-            y_curve = AdvancedSCurvePlanner(_q0, _q1, self.v_max, self.a_max, self.j_max)
+            y_curve = AdvancedSCurvePlanner(
+                _q0, _q1, self.v_max, self.a_max, self.j_max
+            )
 
             _q0 = _init_z
             _q1 = z
-            z_curve = AdvancedSCurvePlanner(_q0, _q1, self.v_max, self.a_max, self.j_max)
+            z_curve = AdvancedSCurvePlanner(
+                _q0, _q1, self.v_max, self.a_max, self.j_max
+            )
 
             _q0 = _init_angle
             _q1 = angle
 
-            a_curve = AdvancedSCurvePlanner(_q0, _q1, self.v_max, self.a_max, self.j_max)
+            a_curve = AdvancedSCurvePlanner(
+                _q0, _q1, self.v_max, self.a_max, self.j_max
+            )
 
             _x_total_time = x_curve.T
             _y_total_time = y_curve.T
