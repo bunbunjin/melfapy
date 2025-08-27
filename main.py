@@ -11,5 +11,6 @@ sample = MelfaController(
     j_max=400,
     a_max=500,
     v_max=500,
+    address=('192.168.0.10', 10000)
 )
 sample.send_packet()
