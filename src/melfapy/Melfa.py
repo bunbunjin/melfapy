@@ -136,7 +136,7 @@ class MelfaController(MelfaPacket):
             stream_pose = self.state
 
             print(f"Send to coordinate for Melfa: {stream_pose}")
-            await asyncio.sleep(0.0071)
+            await asyncio.sleep(self.sleep_time)
             packet = MelfaPacket(
                 command=self.command,
                 send_type=self.send_type,
