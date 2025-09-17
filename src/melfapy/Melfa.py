@@ -12,6 +12,13 @@ import math
 
 @dataclass
 class MelfaPose:
+    """
+    args:
+        values: If you use position coordinate, this argument [x, y, z, a, b, c, l1, l2]
+                If you use joint coordinates, this argument [j1, j2, j3, j4, j5, j6, j7, j8].
+
+    """
+
     values: list
 
     def __getitem__(self, item):
