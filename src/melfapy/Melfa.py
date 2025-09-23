@@ -263,10 +263,11 @@ class MelfaController(MelfaPacket):
 
 @dataclasses.dataclass
 class MelfaDatalink(MelfaPose):
-    def listen(self, address: tuple[str, int] = ("192.168.0.20", 10001)) -> None:
+    def listen(self, address: tuple[str, int] = ("192.168.0.20", 10009)) -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.connect(address)
             pose = self.as_comma()
+            print(pose.encode("ascii"))
             s.sendall(pose.encode("ascii"))
 
     def confirm_pose(self):

@@ -30,6 +30,6 @@ sample = MelfaController(
 sample.send_packet()
 
 
-sample_datalink = [10, 10, 100, 0, 0, 29, 0, 0, 4, 0]
+sample_datalink = [200, 100, 100, 0, 0, 0, 0, 0, 4, 0]
 sample = MelfaDatalink(sample_datalink)
-sample.confirm_pose()
+sample.listen(address=("192.168.0.20", 10009))
