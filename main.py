@@ -28,3 +28,8 @@ sample = MelfaController(
     address=("192.168.0.10", 10000),
 )
 sample.send_packet()
+
+
+sample_datalink = [200, 100, 100, 0, 0, 0, 0, 0, 4, 0]
+sample = MelfaDatalink(sample_datalink)
+sample.listen(address=("192.168.0.20", 10009))

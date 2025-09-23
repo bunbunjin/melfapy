@@ -1,6 +1,7 @@
 import asyncio
 import concurrent.futures
 import threading
+import dataclasses
 from dataclasses import dataclass, field
 from .utils.advanced_S_curve_acceleration import AdvancedSCurvePlanner
 import struct
@@ -16,7 +17,6 @@ class MelfaPose:
     args:
         values: If you use position coordinate, this argument [x, y, z, a, b, c, l1, l2]
                 If you use joint coordinates, this argument [j1, j2, j3, j4, j5, j6, j7, j8].
-
     """
 
     values: list
@@ -26,6 +26,10 @@ class MelfaPose:
 
     def as_floats(self) -> list:
         pose = [int(v) if i > 7 else float(v) for i, v in enumerate(self.values)]
+        return pose
+
+    def as_comma(self) -> str:
+        pose = ",".join(map(str, self.values)) + "\r\n"
         return pose
 
 
@@ -185,7 +189,6 @@ class MelfaController(MelfaPacket):
         _init_y = _init_POSE[1]
         _init_z = _init_POSE[2]
         _init_angle = _init_POSE[5]
-        print(_init_angle)
         print("send to coordinate for Melfa")
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(self.address)
@@ -256,3 +259,17 @@ class MelfaController(MelfaPacket):
             asyncio.run(position_publish())
 
         return None
+
+
+@dataclasses.dataclass
+class MelfaDatalink(MelfaPose):
+    def listen(self, address: tuple[str, int] = ("192.168.0.20", 10009)) -> None:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.connect(address)
+            pose = self.as_comma()
+            print(pose.encode("ascii"))
+            s.sendall(pose.encode("ascii"))
+
+    def confirm_pose(self):
+        pose = self.as_comma()
+        print(pose.encode("ascii"))
