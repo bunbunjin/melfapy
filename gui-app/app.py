@@ -21,4 +21,4 @@ if btn:
     st.write("Send Coodinates")
     datalink.listen(address=("192.168.0.10", 10009))
     btn = False
-print("bbb", btn)
+
