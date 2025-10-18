@@ -262,6 +262,50 @@ class MelfaController(MelfaPacket):
 
         return None
 
+    def send_raw_xy(self, pose: list[list[float]], x_offset: float=0, y_offset:float=0) -> None:
+        _zero_pose = MelfaPose([0] * 10)
+        _first_packet = MelfaPacket(
+            command=0,
+            send_type=0,
+            recv_type=0,
+            pose=_zero_pose,
+            ccount=1,
+            ex_pose=_zero_pose,
+            send_io_type=0,
+            recv_io_type=0,
+        )
+        _end_packet = MelfaPacket(
+            command=255,
+            send_type=1,
+            recv_type=1,
+            pose=_zero_pose,
+            ccount=1,
+            ex_pose=_zero_pose,
+        )
+
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(self.address)
+            data = _first_packet.to_bytes()
+            s.sendto(data, self.address)
+            for i in pose:
+                x, y = i[0], i[1]
+                pose = MelfaPose([x+x_offset, y+y_offset, 100, 0, 0, 29, 0, 0, 4, 0])
+
+                raw_xy_packet = MelfaPacket(
+                    command=0,
+                    send_type=0,
+                    recv_type=0,
+                    pose=pose,
+                    ccount=1,
+                    ex_pose=_zero_pose,
+                    send_io_type=0,
+                    recv_io_type=0,
+                )
+                data = raw_xy_packet.to_bytes()
+                s.sendto(data, self.address)
+
+
+
 
 class MelfaDatalink(MelfaPose):
     def listen(self, address: tuple[str, int] = ("192.168.0.20", 10009)) -> None:
