@@ -230,3 +230,8 @@ dist/
 .venv
 
 .idea
+# Analysis outputs
+analysis/results/*.csv
+analysis/results/*.json
+analysis/results/*.png
+analysis/results/*.pdf
