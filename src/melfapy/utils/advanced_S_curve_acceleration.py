@@ -44,6 +44,7 @@ class AdvancedSCurvePlanner:
         self.a_max = abs(a_max)
         self.j_max = abs(j_max)
 
+
         # 総移動距離
         self.D = abs(q1 - q0)
 
@@ -115,6 +116,7 @@ class AdvancedSCurvePlanner:
         self.t6 = self.t5 + self.Ta
         self.t7 = self.t6 + self.Tj1
         self.T = self.t7  # 全移動時間（再代入だが整合性のため）
+
 
     def get_profile(self, t):
         """

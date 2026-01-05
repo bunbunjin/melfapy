@@ -87,7 +87,7 @@ class MelfaPacket:
 class MelfaController(MelfaPacket):
     v_max: int = 300  # Max speed
     a_max: int = 500  # Max acceleration
-    j_max: int = 700  # # Max jark
+    j_max: int = 700  # Max jerk
     sleep_time = 0.0031
 
     def get_position(self) -> tuple:
