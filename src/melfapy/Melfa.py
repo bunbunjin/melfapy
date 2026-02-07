@@ -4,6 +4,7 @@ import threading
 import dataclasses
 from dataclasses import dataclass, field
 from .utils.advanced_S_curve_acceleration import AdvancedSCurvePlanner
+from .utils.acceleration_profile_exporter import AccelerationProfileExporter
 import struct
 import socket
 import time
@@ -87,7 +88,7 @@ class MelfaPacket:
 class MelfaController(MelfaPacket):
     v_max: int = 300  # Max speed
     a_max: int = 500  # Max acceleration
-    j_max: int = 700  # Max jerk
+    j_max: int = 700  # # Max jark
     sleep_time = 0.0031
 
     def get_position(self) -> tuple:
@@ -224,6 +225,23 @@ class MelfaController(MelfaPacket):
             _y_total_time = y_curve.T
             _z_total_time = z_curve.T
             _a_total_time = a_curve.T
+
+            # Export acceleration profiles to CSV
+            exporter = AccelerationProfileExporter()
+            axes = {
+                "x": x_curve,
+                "y": y_curve,
+                "z": z_curve,
+                "angle": a_curve
+            }
+            parameters = {
+                "v_max": self.v_max,
+                "a_max": self.a_max,
+                "j_max": self.j_max
+            }
+            exporter.export_multi_axis(axes, dt=self.sleep_time)
+            exporter.export_summary(axes, parameters=parameters)
+            print("[INFO] Acceleration profiles exported to CSV")
 
             time.sleep(self.sleep_time)
 
