@@ -1,6 +1,9 @@
+from pydantic import BaseModel
+from typing import ClassVar
 import asyncio
 import concurrent.futures
 import threading
+import dataclasses
 from dataclasses import dataclass, field
 from .utils.advanced_S_curve_acceleration import AdvancedSCurvePlanner
 import struct
@@ -10,9 +13,14 @@ import numpy as np
 import math
 
 
-@dataclass
-class MelfaPose:
-    values: list
+class MelfaPose(BaseModel):
+    """
+    args:
+        values: If you use position coordinate, this argument [x, y, z, a, b, c, l1, l2]
+                If you use joint coordinates, this argument [j1, j2, j3, j4, j5, j6, j7, j8].
+    """
+
+    values: list[float]
 
     def __getitem__(self, item):
         return self.values[item]
@@ -21,9 +29,15 @@ class MelfaPose:
         pose = [int(v) if i > 7 else float(v) for i, v in enumerate(self.values)]
         return pose
 
+    def as_comma(self) -> str:
+        print(self.values)
+        for i in self.values:
+            print(i, type(i))
+        pose = ",".join(map(str, self.values)) + "\r\n"
+        return pose
 
-@dataclass
-class MelfaPacket:
+
+class MelfaPacket(BaseModel):
     command: int
     send_type: int
     recv_type: int
@@ -37,9 +51,9 @@ class MelfaPacket:
     ccount: int = 1
     ex_pose: MelfaPose = field(default_factory=list)
     address: tuple[str, int] = ("192.168.0.20", 10001)
-    lock = asyncio.Lock()
-    state = [0, 0, 0, 0, 0, 0, 0, 0, 4, 0]
-    done_flags = [False, False, False, False]
+    lock: ClassVar[asyncio.Lock] = asyncio.Lock()
+    state: list[int] = [0, 0, 0, 0, 0, 0, 0, 0, 4, 0]
+    done_flags: list[bool] = [False, False, False, False]
 
     def to_bytes(self) -> bytes:
         reserve = 0
@@ -72,17 +86,16 @@ class MelfaPacket:
         return struct.pack(fmt, *args)
 
 
-@dataclass
 class MelfaController(MelfaPacket):
     v_max: int = 300  # Max speed
     a_max: int = 500  # Max acceleration
     j_max: int = 700  # # Max jark
-    sleep_time = 0.0031
+    sleep_time: int = 0.0031
 
     def get_position(self) -> tuple:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(self.address)
-            _zero_pose = MelfaPose([0] * 10)
+            _zero_pose = MelfaPose(values=[0] * 10)
             _chack_positon_packet = MelfaPacket(
                 command=0,
                 send_type=0,
@@ -141,14 +154,14 @@ class MelfaController(MelfaPacket):
                 command=self.command,
                 send_type=self.send_type,
                 recv_type=self.recv_type,
-                ex_pose=MelfaPose([0] * 10),
-                pose=MelfaPose(stream_pose),
+                ex_pose=MelfaPose(values=[0] * 10),
+                pose=MelfaPose(values=stream_pose),
             )
             s.sendto(packet.to_bytes(), self.address)
 
     def send_packet(self) -> None:
         _POSE = self.pose
-        _zero_pose = MelfaPose([0] * 10)
+        _zero_pose = MelfaPose(values=[0] * 10)
         _first_packet = MelfaPacket(
             command=0,
             send_type=0,
@@ -178,7 +191,6 @@ class MelfaController(MelfaPacket):
         _init_y = _init_POSE[1]
         _init_z = _init_POSE[2]
         _init_angle = _init_POSE[5]
-        print(_init_angle)
         print("send to coordinate for Melfa")
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(self.address)
@@ -249,3 +261,60 @@ class MelfaController(MelfaPacket):
             asyncio.run(position_publish())
 
         return None
+
+    def send_raw_xy(self, pose: list[list[float]], x_offset: float=0, y_offset:float=0) -> None:
+        _zero_pose = MelfaPose([0] * 10)
+        _first_packet = MelfaPacket(
+            command=0,
+            send_type=0,
+            recv_type=0,
+            pose=_zero_pose,
+            ccount=1,
+            ex_pose=_zero_pose,
+            send_io_type=0,
+            recv_io_type=0,
+        )
+        _end_packet = MelfaPacket(
+            command=255,
+            send_type=1,
+            recv_type=1,
+            pose=_zero_pose,
+            ccount=1,
+            ex_pose=_zero_pose,
+        )
+
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(self.address)
+            data = _first_packet.to_bytes()
+            s.sendto(data, self.address)
+            for i in pose:
+                x, y = i[0], i[1]
+                pose = MelfaPose([x+x_offset, y+y_offset, 100, 0, 0, 29, 0, 0, 4, 0])
+
+                raw_xy_packet = MelfaPacket(
+                    command=0,
+                    send_type=0,
+                    recv_type=0,
+                    pose=pose,
+                    ccount=1,
+                    ex_pose=_zero_pose,
+                    send_io_type=0,
+                    recv_io_type=0,
+                )
+                data = raw_xy_packet.to_bytes()
+                s.sendto(data, self.address)
+
+
+
+
+class MelfaDatalink(MelfaPose):
+    def listen(self, address: tuple[str, int] = ("192.168.0.20", 10009)) -> None:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.connect(address)
+            pose = self.as_comma()
+            print(pose.encode("ascii"))
+            s.sendall(pose.encode("ascii"))
+
+    def confirm_pose(self):
+        pose = self.as_comma()
+        print(pose.encode("ascii"))
