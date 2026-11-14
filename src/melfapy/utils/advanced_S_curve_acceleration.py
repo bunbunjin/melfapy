@@ -210,7 +210,7 @@ class AdvancedSCurvePlanner:
             t_rel = t - self.t5
             jerk = 0
             acc = -a_lim_signed
-            vel = v_lim_signed - a_lim_signed * (self.Tj2 + t_rel)
+            vel = v_lim_signed - a_lim_signed * (0.5 * self.Tj2 + t_rel)
             # pos_t5 はフェーズ5の終了位置
             pos_t5_from_init_logic = (
                 self.q0
@@ -226,7 +226,7 @@ class AdvancedSCurvePlanner:
         elif self.t6 <= t <= self.t7:  # Phase 7: 減速終了（ジャーク減少）
             t_rem = self.t7 - t  # 終了までの残り時間
             jerk = j_max_signed  # 負の加速から0に戻るため、ジャークは正
-            acc = j_max_signed * t_rem  # 終了に向けて加速度が0に戻る
+            acc = -j_max_signed * t_rem  # 減速中（負）の加速度が終了に向けて0に戻る
             vel = 0.5 * j_max_signed * t_rem**2  # 終了に向けて速度が0に戻る
             pos = self.q1 - (1 / 6) * j_max_signed * t_rem**3  # 終了位置から逆算
 
