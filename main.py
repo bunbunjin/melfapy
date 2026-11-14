@@ -15,7 +15,6 @@ sample = MelfaController(
     address=("192.168.0.10", 10000),
 )
 sample.send_packet()
-sample.conf()
 
 j1 = 100
 j2 = 200
@@ -29,7 +28,6 @@ sample = MelfaController(
     address=("192.168.0.10", 10000),
 )
 # sample.send_packet()
-sample.conf()
 
 sample_datalink = MelfaPose(values=["200", 100, 100, 0, 0, 0, 0, 0, 4, 0])
 sample = MelfaDatalink(values=sample_datalink.values)
