@@ -99,7 +99,44 @@ def _peaks(vel, acc, jerk) -> dict:
     }
 
 
-def analyze_one(csv_path: Path, window: float, plot: bool) -> dict:
+def _follow(meta, t_cmd, cmd, rep, moving) -> dict:
+    """How the controller's replies relate to what was commanded.
+
+    packet_shift: n if every reply equals the command sent n packets earlier.
+    lag_ms / rms_mm / max_mm: best pure time delay between the planned profile
+    and the replies, and how far the replies are from that delayed profile.
+    """
+    limits = meta["limits"]
+    shift = None
+    for n in range(0, 6):
+        if len(cmd) > n + 2 and np.allclose(rep[n:, moving], cmd[: len(cmd) - n, moving], atol=2e-3):
+            shift = n
+            break
+
+    planners = [
+        AdvancedSCurvePlanner(meta["start"][i], meta["target"][i], limits["v_max"], limits["a_max"], limits["j_max"])
+        for i in moving
+    ]
+
+    def residual(tau):
+        return np.concatenate(
+            [rep[:, i] - np.array([pl.get_profile(v)[0] for v in t_cmd - tau]) for i, pl in zip(moving, planners)]
+        )
+
+    taus = np.arange(-0.02, 0.25, 0.0005)
+    rms = [float(np.sqrt(np.mean(residual(tau) ** 2))) for tau in taus]
+    best = int(np.argmin(rms))
+    res = residual(taus[best])
+    return {
+        "packet_shift": shift,
+        "lag_ms": float(taus[best] * 1000),
+        "rms_mm": rms[best],
+        "max_mm": float(np.max(np.abs(res))),
+        "_residual": res.reshape(len(moving), -1),
+    }
+
+
+def analyze_one(csv_path: Path, window, plot: bool) -> dict:
     samples = load_trajectory_csv(csv_path)
     meta = json.loads(csv_path.with_suffix(".meta.json").read_text())
     limits = meta["limits"]
@@ -109,6 +146,9 @@ def analyze_one(csv_path: Path, window: float, plot: bool) -> dict:
     cmd = np.array([s.command for s in samples])
     rep = np.array([s.reply for s in samples])
     intervals = np.diff(t_cmd)
+    if window is None:
+        # 3次式の当てはめに十分な点数が入る幅にする
+        window = max(0.06, 8 * float(np.median(intervals)))
 
     result = {
         "name": meta["name"],
@@ -118,6 +158,7 @@ def analyze_one(csv_path: Path, window: float, plot: bool) -> dict:
         "target": meta["target"],
         "samples": len(samples),
         "duration_s": float(t_rep[-1]),
+        "derivative_window_s": window,
         "send_interval_ms": {
             "mean": float(intervals.mean() * 1000),
             "p99": float(np.percentile(intervals, 99) * 1000),
@@ -137,9 +178,7 @@ def analyze_one(csv_path: Path, window: float, plot: bool) -> dict:
             continue
         planner, planned = _planned(meta, i, t_cmd)
         sent = local_derivatives(t_cmd, cmd[:, i], window)
-        reply = local_derivatives(t_rep, rep[:, i], window)
-        # 同じ送信時刻で比べた、指令に対する応答の遅れ（位置）
-        tracking = rep[:, i] - cmd[:, i]
+        steps = np.abs(np.diff(cmd[:, i]))
         result["axes"][axis] = {
             "travel_mm": float(meta["target"][i] - meta["start"][i]),
             "planned": {
@@ -149,33 +188,32 @@ def analyze_one(csv_path: Path, window: float, plot: bool) -> dict:
                 "peak_jerk": float(planner.j_max),
             },
             "sent": _peaks(*sent[1:]),
-            "reply": _peaks(*reply[1:]),
-            "max_step_mm": float(np.max(np.abs(np.diff(cmd[:, i])))),
-            "max_tracking_gap_mm": float(np.max(np.abs(tracking))),
+            "max_step_mm": float(steps.max()),
+            "max_step_speed": float(np.max(steps / intervals)),
         }
-        series[axis] = (planned, sent, reply)
+        series[axis] = (planned, sent, rep[:, i])
 
-    # XYZ の合成（経路）速度: 軸ごとに独立して計画しているので v_max を超えうる
     moving = [XYZ.index(a) for a in series]
+    follow = None
     if moving:
+        # XYZ の合成（経路）速度: 軸ごとに独立して計画しているので各軸の最大値より大きくなる
         sent_speed = np.sqrt(sum(series[XYZ[i]][1][1] ** 2 for i in moving))
-        reply_speed = np.sqrt(sum(series[XYZ[i]][2][1] ** 2 for i in moving))
         planned_speed = np.sqrt(sum(series[XYZ[i]][0][:, 1] ** 2 for i in moving))
         result["path_speed"] = {
             "planned": float(planned_speed.max()),
             "sent": float(sent_speed.max()),
-            "reply": float(reply_speed.max()),
             "v_max": limits["v_max"],
         }
+        follow = _follow(meta, t_cmd, cmd, rep, moving)
+        result["reply"] = {k: v for k, v in follow.items() if not k.startswith("_")}
 
-    out = csv_path.with_suffix(".stats.json")
-    out.write_text(json.dumps(result, indent=2))
+    csv_path.with_suffix(".stats.json").write_text(json.dumps(result, indent=2))
     if plot and series:
-        _plot(csv_path.with_suffix(".png"), meta, t_cmd, t_rep, series)
+        _plot(csv_path.with_suffix(".png"), meta, t_cmd, series, follow)
     return result
 
 
-def _plot(path: Path, meta, t_cmd, t_rep, series) -> None:
+def _plot(path: Path, meta, t_cmd, series, follow) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -186,12 +224,13 @@ def _plot(path: Path, meta, t_cmd, t_rep, series) -> None:
         ("velocity [mm/s]", 1),
         ("acceleration [mm/s²]", 2),
         ("jerk [mm/s³]", 3),
+        ("reply - delayed plan [mm]", None),
     )
     axes_names = list(series)
     fig, axs = plt.subplots(
         len(rows),
         len(axes_names),
-        figsize=(5.2 * len(axes_names), 9.5),
+        figsize=(5.2 * len(axes_names), 11.5),
         sharex=True,
         squeeze=False,
         facecolor=SURFACE,
@@ -201,9 +240,14 @@ def _plot(path: Path, meta, t_cmd, t_rep, series) -> None:
         for row, (label, k) in enumerate(rows):
             ax = axs[row][col]
             ax.set_facecolor(SURFACE)
-            ax.plot(t_cmd, planned[:, k], color=COLORS["planned"], lw=2, ls="--", label="planned profile")
-            ax.plot(t_cmd, sent[k], color=COLORS["sent"], lw=2, label="commands sent")
-            ax.plot(t_rep, reply[k], color=COLORS["reply"], lw=2, ls=":", label="controller reply")
+            if k is None:
+                ax.plot(t_cmd, follow["_residual"][col], color=COLORS["reply"], lw=2)
+                ax.axhline(0, color=GRID, lw=1)
+            else:
+                ax.plot(t_cmd, planned[:, k], color=COLORS["planned"], lw=2, ls="--", label="planned profile")
+                ax.plot(t_cmd, sent[k], color=COLORS["sent"], lw=2, label="commands sent")
+                if k == 0:
+                    ax.plot(t_cmd, reply, color=COLORS["reply"], lw=2, ls=":", label="controller reply")
             ax.grid(True, color=GRID, lw=0.8)
             ax.tick_params(colors=INK, labelsize=9)
             for side in ("top", "right"):
@@ -219,15 +263,18 @@ def _plot(path: Path, meta, t_cmd, t_rep, series) -> None:
     handles, labels = axs[0][0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper right", ncol=3, frameon=False, fontsize=10, labelcolor=INK)
     limits = meta["limits"]
+    start = [round(v, 1) for v in meta["start"][:3]]
+    target = [round(v, 1) for v in meta["target"]]
     fig.suptitle(
-        f"{meta['name']}: {meta['start'][:3]} -> {meta['target']}   "
-        f"v_max={limits['v_max']} a_max={limits['a_max']} j_max={limits['j_max']}   recv_type={meta['recv_type']}",
+        f"{meta['name']}: {start} -> {target}\n"
+        f"v_max={limits['v_max']} a_max={limits['a_max']} j_max={limits['j_max']}   "
+        f"recv_type={meta['recv_type']}   reply lag {follow['lag_ms']:.0f} ms",
         x=0.01,
         ha="left",
         fontsize=11,
         color=INK,
     )
-    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
     fig.savefig(path, dpi=130, facecolor=SURFACE)
     plt.close(fig)
 
@@ -236,7 +283,7 @@ def analyze(args) -> None:
     for name in args.csv:
         r = analyze_one(Path(name), args.window, not args.no_plot)
         iv = r["send_interval_ms"]
-        print(f"\n== {r['name']}  recv_type={r['recv_type']}  {r['start']} -> {r['target']}")
+        print(f"\n== {r['name']}  recv_type={r['recv_type']}  {[round(v, 1) for v in r['start']]} -> {[round(v, 1) for v in r['target']]}")
         print(
             f"   samples={r['samples']}  duration={r['duration_s']:.3f}s  "
             f"send interval mean={iv['mean']:.2f} p99={iv['p99']:.2f} max={iv['max']:.2f} ms  "
@@ -244,7 +291,7 @@ def analyze(args) -> None:
         )
         print(f"   {'axis':4} {'source':8} {'v [mm/s]':>10} {'a [mm/s2]':>10} {'j [mm/s3]':>10}")
         for axis, a in r["axes"].items():
-            for source in ("planned", "sent", "reply"):
+            for source in ("planned", "sent"):
                 p = a[source]
                 print(
                     f"   {axis:4} {source:8} {p['peak_velocity']:10.1f} "
@@ -252,13 +299,17 @@ def analyze(args) -> None:
                 )
             print(
                 f"   {axis:4} planned time={a['planned']['time_s']:.3f}s  "
-                f"max step={a['max_step_mm']:.3f} mm  max command-reply gap={a['max_tracking_gap_mm']:.3f} mm"
+                f"max step={a['max_step_mm']:.3f} mm ({a['max_step_speed']:.1f} mm/s between packets)"
             )
         if "path_speed" in r:
             ps = r["path_speed"]
+            print(f"   path speed: planned={ps['planned']:.1f} sent={ps['sent']:.1f} mm/s (v_max={ps['v_max']})")
+        if "reply" in r:
+            f = r["reply"]
+            shift = "none" if f["packet_shift"] is None else f"{f['packet_shift']} packet(s)"
             print(
-                f"   path speed: planned={ps['planned']:.1f} sent={ps['sent']:.1f} "
-                f"reply={ps['reply']:.1f} mm/s (v_max={ps['v_max']})"
+                f"   reply: exact copy of an earlier command: {shift};  "
+                f"lag to plan {f['lag_ms']:.1f} ms, deviation rms {f['rms_mm']:.3f} mm, max {f['max_mm']:.3f} mm"
             )
 
 
@@ -279,7 +330,7 @@ def main() -> None:
 
     ana = sub.add_parser("analyze", help="記録した CSV を解析する")
     ana.add_argument("csv", nargs="+")
-    ana.add_argument("--window", type=float, default=0.06, help="微分に使う時間窓 [s]")
+    ana.add_argument("--window", type=float, default=None, help="微分に使う時間窓 [s]（省略時は送信間隔から決める）")
     ana.add_argument("--no-plot", action="store_true")
     ana.set_defaults(func=analyze)
 
