@@ -27,6 +27,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from melfapy.Melfa import MelfaController, MelfaPose  # noqa: E402
 from melfapy.utils.advanced_S_curve_acceleration import AdvancedSCurvePlanner  # noqa: E402
+from melfapy.utils.path_planner import LinearPathPlanner  # noqa: E402
 from melfapy.utils.trajectory import (  # noqa: E402
     load_trajectory_csv,
     local_derivatives,
@@ -68,6 +69,7 @@ def record(args) -> None:
         "name": args.name,
         "address": list(address),
         "recv_type": args.recv_type,
+        "planner": "path",
         "limits": {"v_max": args.v_max, "a_max": args.a_max, "j_max": args.j_max},
         "sleep_time": controller.sleep_time,
         "start": [float(v) for v in start[:8]],
@@ -78,17 +80,36 @@ def record(args) -> None:
     print(f"{args.name}: {start[:3]} -> {target[:3]}  samples={len(trajectory)}  saved {csv_path}")
 
 
-def _planned(meta, axis_index, t):
-    limits = meta["limits"]
-    planner = AdvancedSCurvePlanner(
-        meta["start"][axis_index],
-        meta["target"][axis_index],
-        limits["v_max"],
-        limits["a_max"],
-        limits["j_max"],
-    )
-    profile = np.array([planner.get_profile(v) for v in t], dtype=float)
-    return planner, profile
+class _AxisPlan:
+    """計画上の1軸分のプロファイル。
+
+    planner が "path" の記録は直線経路に沿った1本のS字、それ以前の記録は
+    軸ごとに独立したS字で計画されている。
+    """
+
+    def __init__(self, meta, axis_index):
+        limits = (meta["limits"]["v_max"], meta["limits"]["a_max"], meta["limits"]["j_max"])
+        self.axis = axis_index
+        if meta.get("planner") == "path":
+            self.path = LinearPathPlanner(meta["start"][:3], meta["target"][:3], 0.0, 0.0, *limits)
+            self.T = self.path.T
+            scale = abs(meta["target"][axis_index] - meta["start"][axis_index]) / self.path.distance
+            self.peak_velocity = self.path.linear.v_lim * scale
+            self.peak_acceleration = self.path.linear.a_lim * scale
+            self.peak_jerk = self.path.linear.j_max * scale
+        else:
+            self.path = None
+            self.single = AdvancedSCurvePlanner(meta["start"][axis_index], meta["target"][axis_index], *limits)
+            self.T = self.single.T
+            self.peak_velocity = self.single.v_lim
+            self.peak_acceleration = self.single.a_lim
+            self.peak_jerk = self.single.j_max
+
+    def profile(self, t):
+        """各時刻の (位置, 速度, 加速度, ジャーク)。"""
+        if self.path is not None:
+            return np.array([self.path.axis_profile(self.axis, v) for v in t], dtype=float)
+        return np.array([self.single.get_profile(v) for v in t], dtype=float)
 
 
 def _peaks(vel, acc, jerk) -> dict:
@@ -106,21 +127,17 @@ def _follow(meta, t_cmd, cmd, rep, moving) -> dict:
     lag_ms / rms_mm / max_mm: best pure time delay between the planned profile
     and the replies, and how far the replies are from that delayed profile.
     """
-    limits = meta["limits"]
     shift = None
     for n in range(0, 6):
         if len(cmd) > n + 2 and np.allclose(rep[n:, moving], cmd[: len(cmd) - n, moving], atol=2e-3):
             shift = n
             break
 
-    planners = [
-        AdvancedSCurvePlanner(meta["start"][i], meta["target"][i], limits["v_max"], limits["a_max"], limits["j_max"])
-        for i in moving
-    ]
+    plans = [_AxisPlan(meta, i) for i in moving]
 
     def residual(tau):
         return np.concatenate(
-            [rep[:, i] - np.array([pl.get_profile(v)[0] for v in t_cmd - tau]) for i, pl in zip(moving, planners)]
+            [rep[:, i] - plan.profile(t_cmd - tau)[:, 0] for i, plan in zip(moving, plans)]
         )
 
     taus = np.arange(-0.02, 0.25, 0.0005)
@@ -172,22 +189,36 @@ def analyze_one(csv_path: Path, window, plot: bool) -> dict:
         "axes": {},
     }
 
+    # 指令が始点から離れた時刻〜終点に着いた時刻。その内側（窓の半分ぶん）だけで最大値を取る
+    xyz = cmd[:, :3]
+    moving_rows = np.flatnonzero(np.any(xyz != xyz[0], axis=1) & np.any(xyz != xyz[-1], axis=1))
+    if len(moving_rows):
+        t_first, t_last = t_cmd[moving_rows[0]], t_cmd[moving_rows[-1]]
+        interior = (t_cmd >= t_first + window / 2) & (t_cmd <= t_last - window / 2)
+    else:
+        interior = np.zeros(len(t_cmd), dtype=bool)
+    if not interior.any():
+        interior = np.ones(len(t_cmd), dtype=bool)
+
     series = {}
     for i, axis in enumerate(XYZ):
         if abs(meta["target"][i] - meta["start"][i]) < 1e-6:
             continue
-        planner, planned = _planned(meta, i, t_cmd)
+        plan = _AxisPlan(meta, i)
+        planned = plan.profile(t_cmd)
         sent = local_derivatives(t_cmd, cmd[:, i], window)
         steps = np.abs(np.diff(cmd[:, i]))
         result["axes"][axis] = {
             "travel_mm": float(meta["target"][i] - meta["start"][i]),
             "planned": {
-                "time_s": float(planner.T),
-                "peak_velocity": float(planner.v_lim),
-                "peak_acceleration": float(planner.a_lim),
-                "peak_jerk": float(planner.j_max),
+                "time_s": float(plan.T),
+                "peak_velocity": float(plan.peak_velocity),
+                "peak_acceleration": float(plan.peak_acceleration),
+                "peak_jerk": float(plan.peak_jerk),
             },
-            "sent": _peaks(*sent[1:]),
+            # 端点のスナップ（始点・終点での 1 µm の保持と解放）にかかる窓は除く
+            "sent": _peaks(*(d[interior] for d in sent[1:])),
+            "sent_including_ends": _peaks(*sent[1:]),
             "max_step_mm": float(steps.max()),
             "max_step_speed": float(np.max(steps / intervals)),
         }
@@ -196,7 +227,7 @@ def analyze_one(csv_path: Path, window, plot: bool) -> dict:
     moving = [XYZ.index(a) for a in series]
     follow = None
     if moving:
-        # XYZ の合成（経路）速度: 軸ごとに独立して計画しているので各軸の最大値より大きくなる
+        # XYZ の合成（経路）速度
         sent_speed = np.sqrt(sum(series[XYZ[i]][1][1] ** 2 for i in moving))
         planned_speed = np.sqrt(sum(series[XYZ[i]][0][:, 1] ** 2 for i in moving))
         result["path_speed"] = {
