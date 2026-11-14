@@ -6,6 +6,7 @@ import threading
 import dataclasses
 from dataclasses import dataclass
 from .utils.advanced_S_curve_acceleration import AdvancedSCurvePlanner
+from .utils.path_planner import LinearPathPlanner
 from .utils.trajectory import TrajectorySample
 import struct
 import socket
@@ -178,14 +179,18 @@ class MelfaController(MelfaPacket):
             _init_POSE = list(self._exchange(s, _first_packet)[4:14])
             print("[INFO] Send to First packet", "-" * 10)
 
-            # index in the pose -> motion profile from current to target value
-            curves = {
-                index: AdvancedSCurvePlanner(
-                    _init_POSE[index], target, self.v_max, self.a_max, self.j_max
-                )
-                for index, target in ((0, x), (1, y), (2, z), (5, angle))
-            }
-            total_time = max(curve.T for curve in curves.values())
+            # One S-curve along the straight line from the current position to
+            # the target, with the rotation synchronized to it.
+            path = LinearPathPlanner(
+                _init_POSE[:3],
+                (x, y, z),
+                _init_POSE[5],
+                angle,
+                self.v_max,
+                self.a_max,
+                self.j_max,
+            )
+            total_time = path.T
 
             # Axes without a profile keep the value reported by the controller.
             stream_pose = list(_init_POSE)
@@ -196,8 +201,12 @@ class MelfaController(MelfaPacket):
                 # motion takes total_time however fast the loop runs.
                 t = time.perf_counter() - start
                 finished = t >= total_time
-                for index, curve in curves.items():
-                    stream_pose[index] = float(curve.get_profile(t)[0])
+                (
+                    stream_pose[0],
+                    stream_pose[1],
+                    stream_pose[2],
+                    stream_pose[5],
+                ) = path.pose(t)
 
                 packet = MelfaPacket(
                     command=self.command,
