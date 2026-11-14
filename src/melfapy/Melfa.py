@@ -94,7 +94,7 @@ class MelfaController(MelfaPacket):
     v_max: int = 300  # Max speed
     a_max: int = 500  # Max acceleration
     j_max: int = 700  # # Max jark
-    sleep_time: float = 0.0031  # Minimum interval between command packets [s]
+    sleep_time: float = 0.0031  # Wait between a reply and the next command packet [s]
     reply_timeout: float = 1.0  # Max time to wait for a reply from the controller [s]
     _trajectory: list[TrajectorySample] = PrivateAttr(default_factory=list)
 
@@ -191,7 +191,6 @@ class MelfaController(MelfaPacket):
             stream_pose = list(_init_POSE)
             self._trajectory = []
             start = time.perf_counter()
-            next_send = start
             while True:
                 # The profile is sampled at the real elapsed time, so the
                 # motion takes total_time however fast the loop runs.
@@ -221,8 +220,10 @@ class MelfaController(MelfaPacket):
                 if finished:
                     break
 
-                next_send = max(next_send + self.sleep_time, time.perf_counter())
-                self._wait_until(next_send)
+                # Leave sleep_time between a reply and the next command. The
+                # RT ToolBox3 simulator stops answering when a moving command
+                # follows its reply too closely (seen at 0-1 ms, not at 3.1 ms).
+                self._wait_until(time.perf_counter() + self.sleep_time)
 
         return None
 
@@ -241,7 +242,6 @@ class MelfaController(MelfaPacket):
 
         with self._open_socket() as s:
             self._exchange(s, _first_packet)
-            next_send = time.perf_counter()
             for i in pose:
                 x, y = i[0], i[1]
                 xy_pose = MelfaPose(
@@ -258,8 +258,7 @@ class MelfaController(MelfaPacket):
                     send_io_type=0,
                     recv_io_type=0,
                 )
-                next_send = max(next_send + self.sleep_time, time.perf_counter())
-                self._wait_until(next_send)
+                self._wait_until(time.perf_counter() + self.sleep_time)
                 self._exchange(s, raw_xy_packet)
 
 
