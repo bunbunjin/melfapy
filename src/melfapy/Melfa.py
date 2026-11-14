@@ -1,10 +1,10 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import ClassVar
 import asyncio
 import concurrent.futures
 import threading
 import dataclasses
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from .utils.advanced_S_curve_acceleration import AdvancedSCurvePlanner
 import struct
 import socket
@@ -49,7 +49,7 @@ class MelfaPacket(BaseModel):
     io_data: int = 0
     tcount: int = 0
     ccount: int = 1
-    ex_pose: MelfaPose = field(default_factory=list)
+    ex_pose: MelfaPose = Field(default_factory=lambda: MelfaPose(values=[0] * 10))
     address: tuple[str, int] = ("192.168.0.20", 10001)
     lock: ClassVar[asyncio.Lock] = asyncio.Lock()
     state: list[int] = [0, 0, 0, 0, 0, 0, 0, 0, 4, 0]
@@ -263,7 +263,7 @@ class MelfaController(MelfaPacket):
         return None
 
     def send_raw_xy(self, pose: list[list[float]], x_offset: float=0, y_offset:float=0) -> None:
-        _zero_pose = MelfaPose([0] * 10)
+        _zero_pose = MelfaPose(values=[0] * 10)
         _first_packet = MelfaPacket(
             command=0,
             send_type=0,
@@ -289,13 +289,15 @@ class MelfaController(MelfaPacket):
             s.sendto(data, self.address)
             for i in pose:
                 x, y = i[0], i[1]
-                pose = MelfaPose([x+x_offset, y+y_offset, 100, 0, 0, 29, 0, 0, 4, 0])
+                xy_pose = MelfaPose(
+                    values=[x + x_offset, y + y_offset, 100, 0, 0, 29, 0, 0, 4, 0]
+                )
 
                 raw_xy_packet = MelfaPacket(
                     command=0,
                     send_type=0,
                     recv_type=0,
-                    pose=pose,
+                    pose=xy_pose,
                     ccount=1,
                     ex_pose=_zero_pose,
                     send_io_type=0,
