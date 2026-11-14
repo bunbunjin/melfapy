@@ -1,18 +1,4 @@
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib as mpl
-
-
-try:
-    mpl.rcParams["font.sans-serif"] = [
-        "Hiragino Maru Gothic Pro",
-        "Yu Gothic",
-        "MS Gothic",
-    ]
-    mpl.rcParams["axes.unicode_minus"] = False  # マイナス記号の文字化けを防ぐ
-except Exception as e:
-    print(f"日本語フォントの設定中にエラーが発生しました: {e}")
-    print("グラフのラベルが正しく表示されない可能性があります。")
 
 
 class AdvancedSCurvePlanner:
@@ -261,7 +247,24 @@ class AdvancedSCurvePlanner:
 def plot_profiles(planner, title):
     """
     生成されたプロファイルをプロットします。
+
+    matplotlib はプロット時のみ必要なため、ここで import します
+    （ライブラリ本体の依存には含めていません）。
     """
+    import matplotlib as mpl
+    import matplotlib.pyplot as plt
+
+    try:
+        mpl.rcParams["font.sans-serif"] = [
+            "Hiragino Maru Gothic Pro",
+            "Yu Gothic",
+            "MS Gothic",
+        ]
+        mpl.rcParams["axes.unicode_minus"] = False  # マイナス記号の文字化けを防ぐ
+    except Exception as e:
+        print(f"日本語フォントの設定中にエラーが発生しました: {e}")
+        print("グラフのラベルが正しく表示されない可能性があります。")
+
     total_time = planner.T
     if total_time == 0:
         print(f"{title}: 移動距離がゼロのため、プロットをスキップします。")
