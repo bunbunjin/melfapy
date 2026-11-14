@@ -1,18 +1,4 @@
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib as mpl
-
-
-try:
-    mpl.rcParams["font.sans-serif"] = [
-        "Hiragino Maru Gothic Pro",
-        "Yu Gothic",
-        "MS Gothic",
-    ]
-    mpl.rcParams["axes.unicode_minus"] = False  # マイナス記号の文字化けを防ぐ
-except Exception as e:
-    print(f"日本語フォントの設定中にエラーが発生しました: {e}")
-    print("グラフのラベルが正しく表示されない可能性があります。")
 
 
 class AdvancedSCurvePlanner:
@@ -74,13 +60,21 @@ class AdvancedSCurvePlanner:
                 self.Tj2 = self.Tj1
             # Case 2: 最大速度には到達しない (速度プロファイルが三角形)
             else:
-                self.Tj1 = (
-                    np.sqrt(4 * self.D * self.j_max**2 + self.a_max**3) - self.a_max**2
-                ) / (2 * self.a_max * self.j_max)
-                self.Ta = 0
                 self.Tv = 0
-                self.a_lim = self.j_max * self.Tj1
-                self.v_lim = 0.5 * self.j_max * self.Tj1**2
+                # 最大加速度には到達する場合:
+                # D = a_max * (Tj1 + Ta) * (2 * Tj1 + Ta) を Ta について解く
+                self.Ta = (
+                    np.sqrt(self.Tj1**2 + 4 * self.D / self.a_max) - 3 * self.Tj1
+                ) / 2
+                if self.Ta >= 0:
+                    self.a_lim = self.a_max
+                    self.v_lim = self.a_max * (self.Tj1 + self.Ta)
+                # 最大加速度にも到達しない場合: D = 2 * j_max * Tj1^3
+                else:
+                    self.Tj1 = (self.D / (2 * self.j_max)) ** (1 / 3)
+                    self.Ta = 0
+                    self.a_lim = self.j_max * self.Tj1
+                    self.v_lim = self.j_max * self.Tj1**2
                 self.Tj2 = self.Tj1
         # Case 3: 最大加速度に到達しない (加速度プロファイルが三角形)
         else:
@@ -253,7 +247,24 @@ class AdvancedSCurvePlanner:
 def plot_profiles(planner, title):
     """
     生成されたプロファイルをプロットします。
+
+    matplotlib はプロット時のみ必要なため、ここで import します
+    （ライブラリ本体の依存には含めていません）。
     """
+    import matplotlib as mpl
+    import matplotlib.pyplot as plt
+
+    try:
+        mpl.rcParams["font.sans-serif"] = [
+            "Hiragino Maru Gothic Pro",
+            "Yu Gothic",
+            "MS Gothic",
+        ]
+        mpl.rcParams["axes.unicode_minus"] = False  # マイナス記号の文字化けを防ぐ
+    except Exception as e:
+        print(f"日本語フォントの設定中にエラーが発生しました: {e}")
+        print("グラフのラベルが正しく表示されない可能性があります。")
+
     total_time = planner.T
     if total_time == 0:
         print(f"{title}: 移動距離がゼロのため、プロットをスキップします。")
