@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 from typing import ClassVar
 import asyncio
 import concurrent.futures
@@ -6,6 +6,7 @@ import threading
 import dataclasses
 from dataclasses import dataclass
 from .utils.advanced_S_curve_acceleration import AdvancedSCurvePlanner
+from .utils.trajectory import TrajectorySample
 import struct
 import socket
 import time
@@ -95,6 +96,12 @@ class MelfaController(MelfaPacket):
     j_max: int = 700  # # Max jark
     sleep_time: float = 0.0031  # Minimum interval between command packets [s]
     reply_timeout: float = 1.0  # Max time to wait for a reply from the controller [s]
+    _trajectory: list[TrajectorySample] = PrivateAttr(default_factory=list)
+
+    @property
+    def trajectory(self) -> list[TrajectorySample]:
+        """Commands sent and replies received during the last send_packet()."""
+        return list(self._trajectory)
 
     def _open_socket(self) -> socket.socket:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -182,6 +189,7 @@ class MelfaController(MelfaPacket):
 
             # Axes without a profile keep the value reported by the controller.
             stream_pose = list(_init_POSE)
+            self._trajectory = []
             start = time.perf_counter()
             next_send = start
             while True:
@@ -199,7 +207,17 @@ class MelfaController(MelfaPacket):
                     ex_pose=_zero_pose,
                     pose=MelfaPose(values=stream_pose),
                 )
-                self._exchange(s, packet)
+                reply = self._exchange(s, packet)
+                self._trajectory.append(
+                    TrajectorySample(
+                        t_command=t,
+                        t_reply=time.perf_counter() - start,
+                        command=tuple(stream_pose[:8]),
+                        reply_type=reply[1],
+                        reply=tuple(reply[4:12]),
+                        ccount=reply[20],
+                    )
+                )
                 if finished:
                     break
 
