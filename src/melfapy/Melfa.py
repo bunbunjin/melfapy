@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 from typing import ClassVar
 import asyncio
 import concurrent.futures
@@ -6,6 +6,8 @@ import threading
 import dataclasses
 from dataclasses import dataclass
 from .utils.advanced_S_curve_acceleration import AdvancedSCurvePlanner
+from .utils.path_planner import LinearPathPlanner
+from .utils.trajectory import TrajectorySample
 import struct
 import socket
 import time
@@ -93,8 +95,14 @@ class MelfaController(MelfaPacket):
     v_max: int = 300  # Max speed
     a_max: int = 500  # Max acceleration
     j_max: int = 700  # # Max jark
-    sleep_time: float = 0.0031  # Minimum interval between command packets [s]
+    sleep_time: float = 0.0031  # Wait between a reply and the next command packet [s]
     reply_timeout: float = 1.0  # Max time to wait for a reply from the controller [s]
+    _trajectory: list[TrajectorySample] = PrivateAttr(default_factory=list)
+
+    @property
+    def trajectory(self) -> list[TrajectorySample]:
+        """Commands sent and replies received during the last send_packet()."""
+        return list(self._trajectory)
 
     def _open_socket(self) -> socket.socket:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -171,26 +179,34 @@ class MelfaController(MelfaPacket):
             _init_POSE = list(self._exchange(s, _first_packet)[4:14])
             print("[INFO] Send to First packet", "-" * 10)
 
-            # index in the pose -> motion profile from current to target value
-            curves = {
-                index: AdvancedSCurvePlanner(
-                    _init_POSE[index], target, self.v_max, self.a_max, self.j_max
-                )
-                for index, target in ((0, x), (1, y), (2, z), (5, angle))
-            }
-            total_time = max(curve.T for curve in curves.values())
+            # One S-curve along the straight line from the current position to
+            # the target, with the rotation synchronized to it.
+            path = LinearPathPlanner(
+                _init_POSE[:3],
+                (x, y, z),
+                _init_POSE[5],
+                angle,
+                self.v_max,
+                self.a_max,
+                self.j_max,
+            )
+            total_time = path.T
 
             # Axes without a profile keep the value reported by the controller.
             stream_pose = list(_init_POSE)
+            self._trajectory = []
             start = time.perf_counter()
-            next_send = start
             while True:
                 # The profile is sampled at the real elapsed time, so the
                 # motion takes total_time however fast the loop runs.
                 t = time.perf_counter() - start
                 finished = t >= total_time
-                for index, curve in curves.items():
-                    stream_pose[index] = float(curve.get_profile(t)[0])
+                (
+                    stream_pose[0],
+                    stream_pose[1],
+                    stream_pose[2],
+                    stream_pose[5],
+                ) = path.pose(t)
 
                 packet = MelfaPacket(
                     command=self.command,
@@ -199,12 +215,24 @@ class MelfaController(MelfaPacket):
                     ex_pose=_zero_pose,
                     pose=MelfaPose(values=stream_pose),
                 )
-                self._exchange(s, packet)
+                reply = self._exchange(s, packet)
+                self._trajectory.append(
+                    TrajectorySample(
+                        t_command=t,
+                        t_reply=time.perf_counter() - start,
+                        command=tuple(stream_pose[:8]),
+                        reply_type=reply[1],
+                        reply=tuple(reply[4:12]),
+                        ccount=reply[20],
+                    )
+                )
                 if finished:
                     break
 
-                next_send = max(next_send + self.sleep_time, time.perf_counter())
-                self._wait_until(next_send)
+                # Leave sleep_time between a reply and the next command. The
+                # RT ToolBox3 simulator stops answering when a moving command
+                # follows its reply too closely (seen at 0-1 ms, not at 3.1 ms).
+                self._wait_until(time.perf_counter() + self.sleep_time)
 
         return None
 
@@ -223,7 +251,6 @@ class MelfaController(MelfaPacket):
 
         with self._open_socket() as s:
             self._exchange(s, _first_packet)
-            next_send = time.perf_counter()
             for i in pose:
                 x, y = i[0], i[1]
                 xy_pose = MelfaPose(
@@ -240,8 +267,7 @@ class MelfaController(MelfaPacket):
                     send_io_type=0,
                     recv_io_type=0,
                 )
-                next_send = max(next_send + self.sleep_time, time.perf_counter())
-                self._wait_until(next_send)
+                self._wait_until(time.perf_counter() + self.sleep_time)
                 self._exchange(s, raw_xy_packet)
 
 
